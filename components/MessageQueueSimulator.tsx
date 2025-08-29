@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
-  Send,
   Mail,
   MessageSquare,
   Smartphone,
@@ -9,9 +8,18 @@ import {
 } from "lucide-react";
 
 const MessageQueueSimulator = () => {
-  const [queues, setQueues] = useState({ email: [], inApp: [], push: [] });
-  const [dlq, setDlq] = useState([]);
-  const [workers, setWorkers] = useState({
+  type QueueType = "email" | "inApp" | "push";
+  interface Message {
+    id: string;
+    type: QueueType;
+    endpoint: string;
+    timestamp: number;
+    retryCount: number;
+    status: string;
+  }
+  const [queues, setQueues] = useState<Record<QueueType, Message[]>>({ email: [], inApp: [], push: [] });
+  const [dlq, setDlq] = useState<Message[]>([]);
+  const [workers, setWorkers] = useState<Record<QueueType, { active: boolean; processing: Message | null }>>({
     email: { active: false, processing: null },
     inApp: { active: false, processing: null },
     push: { active: false, processing: null },
@@ -20,14 +28,14 @@ const MessageQueueSimulator = () => {
     Array<{ message: string; type: string; timestamp: string }>
   >([]);
   const [stats, setStats] = useState({ processed: 0, failed: 0, retried: 0 });
-  const intervalRefs = useRef({});
+  const intervalRefs = useRef<Record<QueueType, NodeJS.Timeout | undefined>>({ email: undefined, inApp: undefined, push: undefined });
 
   const addLog = (message: string, type = "info") => {
     const timestamp = new Date().toLocaleTimeString();
     setLogs((prev) => [...prev.slice(-9), { message, type, timestamp }]);
   };
 
-  const generateMessage = (type: string, endpoint: string) => ({
+  const generateMessage = (type: QueueType, endpoint: string): Message => ({
     id: Math.random().toString(36).substr(2, 9),
     type,
     endpoint,
@@ -36,13 +44,13 @@ const MessageQueueSimulator = () => {
     status: "queued",
   });
 
-  const sendMessage = (type, endpoint) => {
+  const sendMessage = (type: QueueType, endpoint: string) => {
     const message = generateMessage(type, endpoint);
     setQueues((prev) => ({ ...prev, [type]: [...prev[type], message] }));
     addLog(`Message queued: ${endpoint}`, "success");
   };
 
-  const processMessage = (queueType) => {
+  const processMessage = React.useCallback((queueType: QueueType) => {
     setQueues((prev) => {
       if (prev[queueType].length === 0) return prev;
       const [message, ...rest] = prev[queueType];
@@ -84,22 +92,11 @@ const MessageQueueSimulator = () => {
 
       return { ...prev, [queueType]: rest };
     });
-  };
+  }, []);
 
-  useEffect(() => {
-    ["email", "inApp", "push"].forEach((queueType) => {
-      intervalRefs.current[queueType] = setInterval(() => {
-        if (!workers[queueType].active && queues[queueType].length > 0) {
-          processMessage(queueType);
-        }
-      }, 1000);
-    });
-    return () => {
-      Object.values(intervalRefs.current).forEach((i) => clearInterval(i));
-    };
-  }, [workers, queues]);
+  // ...existing code...
 
-  const queueConfigs = {
+  const queueConfigs = React.useMemo(() => ({
     email: {
       icon: Mail,
       endpoint: "POST /login",
@@ -115,9 +112,25 @@ const MessageQueueSimulator = () => {
       endpoint: "POST /friend-req",
       description: "Push notifications",
     },
-  };
+  }), []);
 
-  const getLogIcon = (type) => {
+  useEffect(() => {
+    const refs = intervalRefs.current;
+    (Object.keys(queueConfigs) as QueueType[]).forEach((queueType) => {
+      refs[queueType] = setInterval(() => {
+        if (!workers[queueType].active && queues[queueType].length > 0) {
+          processMessage(queueType);
+        }
+      }, 1000);
+    });
+    return () => {
+      Object.values(refs).forEach((i) => {
+        if (i !== undefined) clearInterval(i as NodeJS.Timeout);
+      });
+    };
+  }, [workers, queues, processMessage, queueConfigs]);
+
+  const getLogIcon = (type: "success" | "warning" | "error" | "info") => {
     switch (type) {
       case "success":
         return "✔️";
@@ -138,7 +151,7 @@ const MessageQueueSimulator = () => {
 
       {/* API Triggers */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        {Object.entries(queueConfigs).map(([type, config]) => {
+        {(Object.entries(queueConfigs) as [QueueType, typeof queueConfigs[QueueType]][]).map(([type, config]) => {
           const Icon = config.icon;
           return (
             <div key={type} className="bg-white border rounded-lg shadow p-4">
@@ -178,7 +191,7 @@ const MessageQueueSimulator = () => {
 
       {/* Queues */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        {Object.entries(queueConfigs).map(([queueType, config]) => {
+        {(Object.entries(queueConfigs) as [QueueType, typeof queueConfigs[QueueType]][]).map(([queueType, config]) => {
           const Icon = config.icon;
           const isActive = workers[queueType].active;
           return (
@@ -194,7 +207,7 @@ const MessageQueueSimulator = () => {
               </div>
               <div className="text-sm">Queued: {queues[queueType].length}</div>
               <div className="text-sm mb-1">
-                Status:{" "}
+                Status: {" "}
                 <span className={isActive ? "text-blue-600" : "text-gray-600"}>
                   {isActive ? "Processing" : "Idle"}
                 </span>
@@ -238,7 +251,7 @@ const MessageQueueSimulator = () => {
           )}
           {logs.map((log, i) => (
             <div key={i} className="flex items-center gap-1">
-              {getLogIcon(log.type)} {log.message} ({log.timestamp})
+              {getLogIcon(log.type as "info" | "success" | "warning" | "error")} {log.message} ({log.timestamp})
             </div>
           ))}
         </div>
@@ -250,9 +263,8 @@ const MessageQueueSimulator = () => {
           onClick={() => {
             for (let i = 0; i < 5; i++) {
               setTimeout(() => {
-                const types = ["email", "inApp", "push"];
-                const randomType =
-                  types[Math.floor(Math.random() * types.length)];
+                const types: QueueType[] = ["email", "inApp", "push"];
+                const randomType = types[Math.floor(Math.random() * types.length)];
                 const config = queueConfigs[randomType];
                 sendMessage(randomType, config.endpoint);
               }, i * 200);
