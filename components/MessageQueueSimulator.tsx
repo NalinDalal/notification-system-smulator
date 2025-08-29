@@ -22,12 +22,12 @@ const MessageQueueSimulator = () => {
   const [stats, setStats] = useState({ processed: 0, failed: 0, retried: 0 });
   const intervalRefs = useRef({});
 
-  const addLog = (message, type = "info") => {
+  const addLog = (message: string, type = "info") => {
     const timestamp = new Date().toLocaleTimeString();
     setLogs((prev) => [...prev.slice(-9), { message, type, timestamp }]);
   };
 
-  const generateMessage = (type, endpoint) => ({
+  const generateMessage = (type: string, endpoint: string) => ({
     id: Math.random().toString(36).substr(2, 9),
     type,
     endpoint,
